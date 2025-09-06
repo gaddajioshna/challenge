@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Low Attendance Detector</title>
+  <style>
+    :root{--bg:#f6f8fa;--card:#ffffff;--muted:#6b7280;--accent:#2563eb;--danger:#ef4444}
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial;margin:0;background:var(--bg);padding:28px;color:#0f1724}
+    .container{max-width:1000px;margin:0 auto}
+    .card{background:var(--card);padding:18px;border-radius:10px;box-shadow:0 6px 18px rgba(15,23,42,0.06)}
+    h1{margin:0 0 6px 0;font-size:20px}
+    p.lead{margin:0 0 14px;color:var(--muted)}
+    .controls{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+    input[type=file]{display:none}
+    button{background:var(--accent);color:white;border:0;padding:8px 12px;border-radius:8px;cursor:pointer}
+    button.ghost{background:transparent;border:1px solid rgba(15,23,42,0.06);color:inherit}
+    .inline{display:inline-flex;align-items:center;gap:8px}
+    table{width:100%;border-collapse:collapse;margin-top:12px}
+    th,td{padding:8px 10px;border-bottom:1px solid #eef2f7;text-align:left}
+    th{background:#fbfdff;font-weight:600}
+    tr.low{background:linear-gradient(90deg, rgba(239,68,68,0.06), transparent)}
+    .badge{display:inline-block;padding:6px 8px;border-radius:999px;background:#eef2ff;color:#1e40af;font-weight:600}
+    .danger-badge{background:rgba(239,68,68,0.12);color:var(--danger);padding:6px 8px;border-radius:999px;font-weight:700}
+    .stats{display:flex;gap:12px;margin-top:12px}
+    .stat{background:#fbfdff;padding:8px;border-radius:8px}
+    .small{font-size:13px;color:var(--muted)}
+    .search{margin-left:auto}
+    .center{display:flex;align-items:center;gap:8px}
+    footer{margin-top:14px;color:var(--muted);font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>Low Attendance Detector</h1>
+      <p class="lead">Upload a CSV of attendance or paste data. The tool will compute attendance percentages and highlight students below the chosen threshold.</p>
+
+      <div class="controls">
+        <label class="inline">
+          <input id="fileInput" type="file" accept="text/csv" />
+          <button id="uploadBtn">Upload CSV</button>
+        </label>
+
+        <div class="inline">
+          <label class="small">Threshold (%)</label>
+          <input id="threshold" type="number" value="75" min="0" max="100" style="width:80px;padding:8px;border-radius:8px;border:1px solid #e6edf3" />
+        </div>
+
+        <button id="detectBtn">Detect Low Attendance</button>
+        <button id="downloadLow" class="ghost">Download Low List (CSV)</button>
+
+        <div class="search" style="margin-left:auto">
+          <input id="search" placeholder="Search name or id" style="padding:8px;border-radius:8px;border:1px solid #e6edf3" />
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div class="stats">
+          <div class="stat"><div class="small">Total students</div><div id="totalCount">0</div></div>
+          <div class="stat"><div class="small">Below threshold</div><div id="lowCount">0</div></div>
+          <div class="stat"><div class="small">Average attendance</div><div id="avgAtt">—</div></div>
+        </div>
+        <div class="center small">Expected CSV columns: <code style="background:#fbfdff;padding:4px 6px;border-radius:6px">StudentID,Name,TotalClasses,Attended</code></div>
+      </div>
+
+      <div style="margin-top:12px">
+        <textarea id="pasteArea" placeholder="Or paste CSV/text here and press Parse" rows="6" style="width:100%;padding:10px;border-radius:8px;border:1px solid #e6edf3"></textarea>
+        <div style="margin-top:8px;display:flex;gap:8px"><button id="parseBtn" class="ghost">Parse Pasted CSV</button><button id="sampleBtn" class="ghost">Load Sample CSV</button></div>
+      </div>
+
+      <div id="tableWrap" style="margin-top:12px;overflow:auto;max-height:420px">
+        <table id="dataTable">
+          <thead>
+            <tr><th>#</th><th>Student ID</th><th>Name</th><th>Total Classes</th><th>Attended</th><th>% Attendance</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <footer>
+        <div class="small">Note: This is a helper tool for identifying low attendance. Verify data and follow your institution's policies before taking action.</div>
+      </footer>
+    </div>
+  </div>
+
+<script>
+// Simple CSV parser (handles commas, optional quotes)
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/).filter(l => l.trim() !== '');
+  const rows = [];
+  for (let line of lines) {
+    const cells = [];
+    let cur = '';
+    let inQuotes = false;
+    for (let i=0;i<line.length;i++){
+      const ch = line[i];
+      if (ch === '"') { inQuotes = !inQuotes; continue; }
+      if (ch === ',' && !inQuotes) { cells.push(cur.trim()); cur = ''; continue; }
+      cur += ch;
+    }
+    cells.push(cur.trim());
+    rows.push(cells);
+  }
+  return rows;
+}
+
+// UI references
+const fileInput = document.getElementById('fileInput');
+const uploadBtn = document.getElementById('uploadBtn');
+const parseBtn = document.getElementById('parseBtn');
+const sampleBtn = document.getElementById('sampleBtn');
+const detectBtn = document.getElementById('detectBtn');
+const downloadLow = document.getElementById('downloadLow');
+const pasteArea = document.getElementById('pasteArea');
+const thresholdInput = document.getElementById('threshold');
+const tbody = document.querySelector('#dataTable tbody');
+const totalCountEl = document.getElementById('totalCount');
+const lowCountEl = document.getElementById('lowCount');
+const avgAttEl = document.getElementById('avgAtt');
+const searchInput = document.getElementById('search');
+
+let students = []; // {id,name,total,attended,percent}
+
+uploadBtn.addEventListener('click', ()=> fileInput.click());
+fileInput.addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const text = await f.text();
+  loadFromCSVText(text);
+});
+
+parseBtn.addEventListener('click', ()=>{
+  const text = pasteArea.value;
+  if (!text.trim()) return alert('Paste CSV content first');
+  loadFromCSVText(text);
+});
+
+sampleBtn.addEventListener('click', ()=>{
+  const sample = `StudentID,Name,TotalClasses,Attended\nS001,Alice,40,38\nS002,Bob,40,25\nS003,Charlie,40,30\nS004,Dee,40,36\nS005,Ellen,40,28`;
+  pasteArea.value = sample; loadFromCSVText(sample);
+});
+
+function loadFromCSVText(text) {
+  try {
+    const rows = parseCSV(text);
+    // If header row detected (contains non-number in first row), use it
+    let start = 0; let header = null;
+    const first = rows[0].map(c=>c.toLowerCase());
+    const hasHeader = first.some(c => ['studentid','name','totalclasses','attended','attendance','total'].includes(c));
+    if (hasHeader) { header = rows[0]; start = 1; }
+
+    const parsed = [];
+    for (let i=start;i<rows.length;i++){
+      const r = rows[i];
+      // Support both 4-column and 3-column formats: id,name,total,attended
+      const id = r[0] || '';
+      const name = r[1] || '';
+      const total = Number(r[2] ?? 0);
+      const attended = Number(r[3] ?? 0);
+      if (id === '' && name==='') continue;
+      let percent = 0;
+      if (total > 0) percent = (attended/total)*100;
+      parsed.push({id,name,total,attended,percent});
+    }
+    students = parsed;
+    renderTable();
+    log('Loaded ' + students.length + ' rows');
+  } catch (err) { alert('Failed to parse CSV: ' + err.message); }
+}
+
+function renderTable() {
+  tbody.innerHTML = '';
+  const threshold = Number(thresholdInput.value) || 0;
+  let lowCount = 0;
+  let sum = 0;
+  const q = searchInput.value.trim().toLowerCase();
+  students.forEach((s, idx) => {
+    const percent = (s.percent || 0);
+    sum += percent;
+    const isLow = percent < threshold;
+    if (isLow) lowCount++;
+    // filter by search
+    if (q && !(s.id.toLowerCase().includes(q) || s.name.toLowerCase().includes(q))) return;
+    const tr = document.createElement('tr');
+    if (isLow) tr.classList.add('low');
+    tr.innerHTML = `<td>${idx+1}</td>
+      <td>${escapeHtml(s.id)}</td>
+      <td>${escapeHtml(s.name)}</td>
+      <td>${s.total}</td>
+      <td>${s.attended}</td>
+      <td>${percent.toFixed(1)}%</td>`;
+    tbody.appendChild(tr);
+  });
+  totalCountEl.innerText = students.length;
+  lowCountEl.innerText = lowCount;
+  avgAttEl.innerText = students.length ? ( (sum/students.length).toFixed(1) + '%' ) : '—';
+}
+
+thresholdInput.addEventListener('change', renderTable);
+searchInput.addEventListener('input', renderTable);
+
+detectBtn.addEventListener('click', ()=>{
+  if (students.length === 0) return alert('Load some data first');
+  renderTable();
+  alert('Detection complete. ' + lowCountEl.innerText + ' students below threshold (' + thresholdInput.value + '%)');
+});
+
+downloadLow.addEventListener('click', ()=>{
+  const threshold = Number(thresholdInput.value) || 0;
+  const low = students.filter(s => (s.percent||0) < threshold);
+  if (low.length === 0) return alert('No students below threshold');
+  const csv = toCSV(low);
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'low_attendance.csv'; a.click(); URL.revokeObjectURL(url);
+});
+
+function toCSV(arr) {
+  const rows = [['StudentID','Name','TotalClasses','Attended','AttendancePercent']];
+  for (const s of arr) rows.push([s.id, s.name, s.total, s.attended, (s.percent||0).toFixed(1)]);
+  return rows.map(r => r.map(cell => '"' + String(cell).replace(/"/g,'""') + '"').join(',')).join('\n');
+}
+
+function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function log(msg) { console.log('[AttendanceDetector] ' + msg); }
+
+// helper: allow dragging a CSV into the paste area
+pasteArea.addEventListener('dragover', e=>{ e.preventDefault(); pasteArea.style.background='#fff7ed'; });
+pasteArea.addEventListener('dragleave', e=>{ pasteArea.style.background=''; });
+pasteArea.addEventListener('drop', e=>{ e.preventDefault(); pasteArea.style.background=''; const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) { f.text().then(t => { pasteArea.value = t; loadFromCSVText(t); }); } });
+
+// keyboard: Ctrl+Enter parse
+pasteArea.addEventListener('keydown', e=>{ if ((e.ctrlKey||e.metaKey) && e.key === 'Enter') parseBtn.click(); });
+
+</script>
+</body>
+</html>
